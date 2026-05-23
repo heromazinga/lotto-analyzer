@@ -1,146 +1,75 @@
-# Lotto Analyzer · Next.js 구조 가이드
+# 로또 분석 (Lotto Analyzer)
 
-## 1. 프로젝트 생성
+통계 기반 로또 번호 추천 웹앱. Next.js + Vercel.
+
+## 빠른 시작
 
 ```bash
-npx create-next-app@latest lotto-analyzer --typescript --tailwind --app --no-src-dir
-cd lotto-analyzer
+# 1. 의존성 설치
+npm install
+
+# 2. 동행복권 회차 데이터 받기 (최초 1회, 약 100초)
+npm run fetch-draws
+
+# 3. 개발 서버
+npm run dev
 ```
 
-## 2. 파일 배치
+브라우저에서 http://localhost:3000 확인.
 
-이 starter의 파일을 이렇게 옮긴다.
+## 폴더 구조
 
 ```
 lotto-analyzer/
+├── app/                   # Next.js App Router
+│   ├── layout.tsx
+│   ├── page.tsx          # 서버 컴포넌트, draws.json 로드
+│   └── globals.css
+├── components/            # UI 컴포넌트
+│   ├── LottoApp.tsx      # 메인 클라이언트 컴포넌트
+│   ├── Ball.tsx          # 로또공 + 빈 슬롯
+│   ├── SelectableTile.tsx
+│   ├── SectionLabel.tsx
+│   ├── AutoSets.tsx      # 5세트 자동 추천 결과
+│   ├── HotColdPanel.tsx  # Hot/Cold 번호 패널
+│   ├── SemiAuto.tsx      # 반자동 추천 박스
+│   └── RecentDraws.tsx   # 최근 5회 당첨번호
+├── lib/                   # 순수 로직
+│   ├── types.ts          # 데이터 모델
+│   ├── analysis.ts       # 빈도/간격/동반출현 분석
+│   ├── scoring.ts        # 스코어링/필터링/추천 생성
+│   └── ui.ts             # 색상 토큰, 날짜 포맷터
 ├── scripts/
-│   └── fetch-draws.mjs       ← 이 파일 그대로
-├── lib/
-│   ├── types.ts              ← 이 파일 그대로
-│   ├── analysis.ts           ← lotto-analyzer.jsx에서 추출 (아래 참고)
-│   └── scoring.ts            ← lotto-analyzer.jsx에서 추출 (아래 참고)
+│   └── fetch-draws.mjs   # 동행복권 API 페치
 ├── data/
-│   └── draws.json            ← 스크립트가 자동 생성
-└── app/
-    └── page.tsx              ← lotto-analyzer.jsx의 UI를 옮김
+│   └── draws.json        # 회차 데이터 (페치 결과)
+└── package.json
 ```
 
-## 3. 데이터 페치
+## 매주 데이터 갱신
 
-처음 한 번:
+토요일 추첨 이후:
 
 ```bash
-node scripts/fetch-draws.mjs
+npm run fetch-draws   # 신규 회차만 incremental 페치
+git add data/draws.json
+git commit -m "data: NNNN회차 추가"
+git push              # Vercel 자동 재배포
 ```
 
-1226회차 기준 약 100초 소요. `data/draws.json` 생성됨. 매주 토요일 추첨 이후 다시 실행하면 신규 회차만 incremental 추가.
+## 자동화 (선택)
 
-`package.json`에 스크립트 등록:
+`.github/workflows/weekly-fetch.yml`로 매주 토요일 새벽 자동 페치 가능. 필요하면 알려줘.
 
-```json
-{
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "fetch-draws": "node scripts/fetch-draws.mjs"
-  }
-}
-```
+## 분석 로직 요약
 
-## 4. 프로토타입의 로직 이식
+- **빈도 점수**: `(번호별 출현 횟수 / 전체 회차수) / (6/45)` — 1.0 초과면 기대치보다 자주
+- **간격 점수**: `현재 미출현 회차수 / 7.5` — 오래 안 나올수록 큼
+- **동반 출현**: 1차 후보 선정 후, 이미 뽑힌 번호와 같이 나오는 빈도로 가산
+- **필터**: 합계 100–175 / 홀짝 2:4–4:2 / 연속수 1쌍 이하 / 끝자리 동일 최대 2개
 
-`lotto-analyzer.jsx` 안에 있는 함수들을 잘라서 `lib/`로 옮김:
+추천 흐름: 스코어 상위 25개 풀 → 가중 샘플링 6개 → 필터 통과 검사 → 통과 못하면 최대 500회 재시도.
 
-**lib/analysis.ts** 에 들어갈 것:
-- `calculateFrequency`
-- `calculateGap`
-- `calculateCoOccurrence`
+## 주의
 
-타입만 살짝 입혀주면 됨:
-
-```typescript
-import type { Draw } from './types';
-
-export function calculateFrequency(draws: Draw[]): number[] {
-  const freq = new Array(46).fill(0);
-  for (const d of draws) for (const n of d.numbers) freq[n]++;
-  return freq;
-}
-// ... 나머지도 동일 패턴
-```
-
-**lib/scoring.ts** 에 들어갈 것:
-- `computeScores`
-- `passesFilter`
-- `pickWeighted`
-- `generateOneSet`
-- `buildSet`
-- `generateMultipleSets`
-- `BALANCED_WEIGHTS` 상수
-- `RECENT_WINDOW` 상수
-
-## 5. app/page.tsx 변환
-
-프로토타입은 mock 데이터를 `useMemo`로 생성했지만, 실 앱에서는 서버 컴포넌트에서 JSON을 import한 뒤 클라이언트 컴포넌트로 넘김:
-
-```typescript
-// app/page.tsx (서버 컴포넌트)
-import draws from '@/data/draws.json';
-import LottoApp from '@/components/LottoApp';
-import type { Draw } from '@/lib/types';
-
-export default function Page() {
-  return <LottoApp draws={draws as Draw[]} />;
-}
-```
-
-```typescript
-// components/LottoApp.tsx (클라이언트 컴포넌트)
-'use client';
-import { useState, useMemo } from 'react';
-import type { Draw } from '@/lib/types';
-import { calculateFrequency, calculateGap, calculateCoOccurrence } from '@/lib/analysis';
-import { generateMultipleSets, generateOneSet, BALANCED_WEIGHTS } from '@/lib/scoring';
-
-export default function LottoApp({ draws }: { draws: Draw[] }) {
-  // ... 프로토타입의 LottoApp 로직 그대로
-  // generateMockDraws 호출만 제거, props로 받은 draws 사용
-}
-```
-
-폴더 트리에서 `components/`를 만들어 `Ball.tsx`, `SelectableTile.tsx`, `AutoSets.tsx`, `HotColdPanel.tsx`, `SemiAuto.tsx`, `RecentDraws.tsx`로 분리하면 유지보수 편함. 한 번에 다 쪼갤 필요는 없고, 일단 `LottoApp.tsx` 하나로 시작해도 됨.
-
-## 6. 배포
-
-`data/draws.json`까지 커밋 → GitHub push → Vercel 자동 배포.
-
-신규 회차 갱신 흐름:
-1. 토요일 저녁 이후 `npm run fetch-draws`
-2. `git add data/draws.json && git commit -m "data: 1227회차 추가" && git push`
-3. Vercel이 자동 재배포
-
-## 7. (선택) 자동화
-
-GitHub Actions로 매주 일요일 새벽에 자동 페치 + 커밋:
-
-```yaml
-# .github/workflows/weekly-fetch.yml
-name: Weekly Draw Fetch
-on:
-  schedule:
-    - cron: '0 18 * * 6'  # 매주 토요일 KST 새벽 3시
-  workflow_dispatch:
-jobs:
-  fetch:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
-      - run: node scripts/fetch-draws.mjs
-      - uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: 'data: weekly draw update'
-```
-
-이러면 부모님 폰에는 매주 자동으로 최신 회차가 반영됨.
+통계 분석일 뿐 실제 당첨을 예측할 수 없습니다. 로또는 매 회차 독립시행입니다.
