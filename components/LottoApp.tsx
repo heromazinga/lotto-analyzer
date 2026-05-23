@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import type { Draw, RecommendedSet } from '@/lib/types';
 import { calculateAllAnalyses } from '@/lib/analysis';
 import {
@@ -16,13 +16,34 @@ import { HotColdPanel } from './HotColdPanel';
 import { SemiAuto } from './SemiAuto';
 import { RecentDraws } from './RecentDraws';
 
-export function LottoApp({ draws }: { draws: Draw[] }) {
+export function LottoApp() {
+  const [draws, setDraws] = useState<Draw[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const [autoSets, setAutoSets] = useState<RecommendedSet[] | null>(null);
   const [isAutoGenerating, setIsAutoGenerating] = useState(false);
 
   const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
   const [semiResult, setSemiResult] = useState<RecommendedSet | null>(null);
   const [isSemiGenerating, setIsSemiGenerating] = useState(false);
+
+  // 클라이언트에서 데이터 페치
+  useEffect(() => {
+    fetch('/draws.json')
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data: Draw[]) => {
+        setDraws(data);
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        setLoadError(err.message);
+        setIsLoading(false);
+      });
+  }, []);
 
   const analyses = useMemo(
     () => calculateAllAnalyses(draws, RECENT_WINDOW),
@@ -32,7 +53,9 @@ export function LottoApp({ draws }: { draws: Draw[] }) {
   const hotNumbers = useMemo(
     () =>
       Array.from({ length: 45 }, (_, i) => i + 1)
-        .sort((a, b) => analyses.recentFrequency[b] - analyses.recentFrequency[a])
+        .sort(
+          (a, b) => analyses.recentFrequency[b] - analyses.recentFrequency[a]
+        )
         .slice(0, 10),
     [analyses]
   );
@@ -45,10 +68,9 @@ export function LottoApp({ draws }: { draws: Draw[] }) {
     [analyses]
   );
 
-  // 데이터가 없을 때 안내 (hooks 호출 후로 이동)
-  if (!draws || draws.length === 0) {
-    return <EmptyState />;
-  }
+  if (isLoading) return <LoadingState />;
+  if (loadError) return <ErrorState message={loadError} />;
+  if (!draws || draws.length === 0) return <EmptyState />;
 
   const handleAutoGenerate = () => {
     setIsAutoGenerating(true);
@@ -100,7 +122,6 @@ export function LottoApp({ draws }: { draws: Draw[] }) {
       }}
     >
       <div style={{ maxWidth: 480, margin: '0 auto', padding: '28px 20px 48px' }}>
-        {/* ────── Header ────── */}
         <div
           style={{
             marginBottom: 28,
@@ -145,7 +166,6 @@ export function LottoApp({ draws }: { draws: Draw[] }) {
           </div>
         </div>
 
-        {/* ────── 5세트 자동 추천 CTA ────── */}
         <button
           onClick={handleAutoGenerate}
           disabled={isAutoGenerating}
@@ -173,10 +193,8 @@ export function LottoApp({ draws }: { draws: Draw[] }) {
             : '5세트 자동 추천 받기'}
         </button>
 
-        {/* ────── 자동 추천 결과 ────── */}
         {autoSets && <AutoSets sets={autoSets} />}
 
-        {/* ────── Hot 패널 ────── */}
         <HotColdPanel
           title="최근 자주 나온 번호 TOP 10"
           numbers={hotNumbers}
@@ -186,7 +204,6 @@ export function LottoApp({ draws }: { draws: Draw[] }) {
           footer={`* 최근 ${RECENT_WINDOW}회차 기준`}
         />
 
-        {/* ────── Cold 패널 ────── */}
         <HotColdPanel
           title="오래 안 나온 번호 TOP 10"
           numbers={coldNumbers}
@@ -195,7 +212,6 @@ export function LottoApp({ draws }: { draws: Draw[] }) {
           onToggle={toggleNumber}
         />
 
-        {/* ────── 반자동 추천 ────── */}
         <SemiAuto
           selectedNumbers={selectedNumbers}
           result={semiResult}
@@ -204,10 +220,8 @@ export function LottoApp({ draws }: { draws: Draw[] }) {
           onClear={handleClearSelection}
         />
 
-        {/* ────── 최근 5회 당첨번호 ────── */}
         <RecentDraws draws={draws} />
 
-        {/* ────── Disclaimer ────── */}
         <p
           style={{
             fontSize: 11,
@@ -224,7 +238,13 @@ export function LottoApp({ draws }: { draws: Draw[] }) {
   );
 }
 
-function EmptyState() {
+function CenterMessage({
+  title,
+  desc,
+}: {
+  title: string;
+  desc: React.ReactNode;
+}) {
   return (
     <div
       style={{
@@ -246,9 +266,26 @@ function EmptyState() {
             margin: '0 0 16px',
           }}
         >
-          데이터 준비 필요
+          {title}
         </h1>
-        <p style={{ fontSize: 14, color: COLORS.textMuted, lineHeight: 1.6 }}>
+        <div style={{ fontSize: 14, color: COLORS.textMuted, lineHeight: 1.6 }}>
+          {desc}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return <CenterMessage title="불러오는 중..." desc="잠시만 기다려주세요." />;
+}
+
+function EmptyState() {
+  return (
+    <CenterMessage
+      title="데이터 준비 필요"
+      desc={
+        <>
           <code
             style={{
               backgroundColor: COLORS.card,
@@ -259,10 +296,24 @@ function EmptyState() {
           >
             npm run fetch-draws
           </code>
+          <br />를 실행해서 회차 데이터를 받아주세요.
+        </>
+      }
+    />
+  );
+}
+
+function ErrorState({ message }: { message: string }) {
+  return (
+    <CenterMessage
+      title="데이터 로드 실패"
+      desc={
+        <>
+          {message}
           <br />
-          를 실행해서 회차 데이터를 받아주세요.
-        </p>
-      </div>
-    </div>
+          잠시 후 다시 시도해주세요.
+        </>
+      }
+    />
   );
 }
